@@ -344,7 +344,7 @@ var ExtractGrafanaClientFromHeaders httpContextFunc = func(ctx context.Context, 
 //
 // It can be retrieved using GrafanaClientFromContext.
 func WithGrafanaClient(ctx context.Context, clientParam *client.GrafanaHTTPAPI) context.Context {
-	return context.WithValue(ctx, grafanaClientFunctorKey{}, func() *client.GrafanaHTTPAPI { return clientParam })
+	return context.WithValue(ctx, grafanaClientFunctorKey{}, func() (*client.GrafanaHTTPAPI, error) { return clientParam, nil })
 }
 
 func WithAADGrafanaClientFunc(ctx context.Context) context.Context {
@@ -360,38 +360,38 @@ func WithAADGrafanaClientFunc(ctx context.Context) context.Context {
 	cachedGrafanaClient := NewGrafanaClient(ctx, config.URL, cachedToken.Token)
 
 	slog.Debug("Constructed cached Grafana client with AAD authentication")
-	var functor func() *client.GrafanaHTTPAPI = func() *client.GrafanaHTTPAPI {
+	var functor func() (*client.GrafanaHTTPAPI, error) = func() (*client.GrafanaHTTPAPI, error) {
 
 		funcCred, funcErr := cred.GetToken(ctx, policy.TokenRequestOptions{
 			Scopes: []string{defaultGrafanaAADResource},
 		})
 		// TODO: do error handling here, and update functor to return errors
 		if funcErr != nil {
-			panic(fmt.Errorf("failed to get AAD token for Grafana: %w", funcErr))
+			return nil, fmt.Errorf("failed to get AAD token for Grafana: %w", funcErr)
 		}
 		// Use the cached client if the token is still valid, otherwise create a new one
 		mutex.Lock()
 		defer mutex.Unlock()
 		if cachedToken == funcCred {
 			// If the cached token is still valid, return the cached client
-			return cachedGrafanaClient
+			return cachedGrafanaClient, nil
 		}
 
 		slog.Debug("Cached client didn't match need to refresh it.")
 
 		cachedToken = funcCred
 		cachedGrafanaClient = NewGrafanaClient(ctx, config.URL, cachedToken.Token)
-		return cachedGrafanaClient
+		return cachedGrafanaClient, nil
 	}
 
 	return context.WithValue(ctx, grafanaClientFunctorKey{}, functor)
 }
 
 // GrafanaClientFromContext retrieves the Grafana client from the context.
-func GrafanaClientFromContext(ctx context.Context) *client.GrafanaHTTPAPI {
-	c, ok := ctx.Value(grafanaClientFunctorKey{}).(func() *client.GrafanaHTTPAPI)
+func GrafanaClientFromContext(ctx context.Context) (*client.GrafanaHTTPAPI, error) {
+	c, ok := ctx.Value(grafanaClientFunctorKey{}).(func() (*client.GrafanaHTTPAPI, error))
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("grafana client not found in context")
 	}
 	return c()
 }
