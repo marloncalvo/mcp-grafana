@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -44,8 +45,19 @@ func promClientFromContext(ctx context.Context, uid string) (promv1.API, error) 
 	cfg := mcpgrafana.GrafanaConfigFromContext(ctx)
 	url := fmt.Sprintf("%s/api/datasources/proxy/uid/%s", strings.TrimRight(cfg.URL, "/"), uid)
 
-	// if using AADCredential directly go to prometheus url
-	if cfg.AADCredential != nil {
+	// Check if datasource has azureAuthType in JSONData
+	requiresAADAuth := false
+	if datasource.JSONData != nil {
+		if jsonDataMap, ok := datasource.JSONData.(map[string]interface{}); ok {
+			if _, hasAzureAuthType := jsonDataMap["azureAuthType"]; hasAzureAuthType {
+				requiresAADAuth = true
+				slog.Debug("Prometheus datasource requires AAD auth", "uid", uid)
+			}
+		}
+	}
+
+	// if using AADCredential and requiresAADAuth, go to prometheus url
+	if cfg.AADCredential != nil && requiresAADAuth {
 		url = datasource.URL
 		cred, err := cfg.AADCredential.GetToken(ctx, policy.TokenRequestOptions{
 			Scopes: []string{defaultPrometheusAADResource},
