@@ -10,22 +10,26 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/prometheus/prometheus/model/labels"
 
 	mcpgrafana "github.com/grafana/mcp-grafana"
 )
 
 const (
-	defaultTimeout    = 30 * time.Second
-	rulesEndpointPath = "/api/prometheus/grafana/api/v1/rules"
+	defaultTimeout               = 30 * time.Second
+	rulesEndpointPath            = "/api/prometheus/grafana/api/v1/rules"
+	defaultGrafanaAADResource    = "ce34e7e5-485f-4d76-964f-b3d2b16d1e4f"
 )
 
 type alertingClient struct {
-	baseURL     *url.URL
-	accessToken string
-	idToken     string
-	apiKey      string
-	httpClient  *http.Client
+	baseURL       *url.URL
+	accessToken   string
+	idToken       string
+	apiKey        string
+	httpClient    *http.Client
+	aadCredential *azidentity.DefaultAzureCredential
 }
 
 func newAlertingClientFromContext(ctx context.Context) (*alertingClient, error) {
@@ -37,10 +41,11 @@ func newAlertingClientFromContext(ctx context.Context) (*alertingClient, error) 
 	}
 
 	client := &alertingClient{
-		baseURL:     parsedBaseURL,
-		accessToken: cfg.AccessToken,
-		idToken:     cfg.IDToken,
-		apiKey:      cfg.APIKey,
+		baseURL:       parsedBaseURL,
+		accessToken:   cfg.AccessToken,
+		idToken:       cfg.IDToken,
+		apiKey:        cfg.APIKey,
+		aadCredential: cfg.AADCredential,
 		httpClient: &http.Client{
 			Timeout: defaultTimeout,
 		},
@@ -72,6 +77,15 @@ func (c *alertingClient) makeRequest(ctx context.Context, path string) (*http.Re
 	if c.accessToken != "" && c.idToken != "" {
 		req.Header.Set("X-Access-Token", c.accessToken)
 		req.Header.Set("X-Grafana-Id", c.idToken)
+	} else if c.aadCredential != nil {
+		// Use AAD authentication
+		token, err := c.aadCredential.GetToken(ctx, policy.TokenRequestOptions{
+			Scopes: []string{defaultGrafanaAADResource},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to get AAD token for alerting client: %w", err)
+		}
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.Token))
 	} else if c.apiKey != "" {
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
 	}
